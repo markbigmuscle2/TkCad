@@ -317,7 +317,7 @@ class MenuBar(Menu):
         
         # help
         helpMenu = Menu(self, tearoff=0)
-        helpMenu.add_command(label="Help", command=lambda: webbrowser.open_new_tab("https://sites.google.com/view/markbigmuscle2/home"))
+        helpMenu.add_command(label="Help", command=lambda: webbrowser.open_new_tab("https://sites.google.com/view/markbigmuscle2/help/tkcad-help"))
 
         self.add_cascade(label="File", menu=fileMenu)
         self.add_cascade(label="Edit", menu=editMenu)
