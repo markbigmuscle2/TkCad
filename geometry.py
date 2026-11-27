@@ -1,5 +1,7 @@
 from customWidgets import *
 from changeHistory import DrawCommand
+from conversions import Conversions
+
 from decimal import Decimal
 from propertyData import *
 from tkinter import font, IntVar, StringVar
@@ -9,6 +11,10 @@ from tkinter import font, IntVar, StringVar
 import math
 import numpy as np
 import re
+
+convertToAbsoluteSize = Conversions.convertToAbsoluteSize
+convertPx = Conversions.convertPx
+fixDegrees = Conversions.fixDegrees
 
 class FixedTextAnnotation:
     canvas = None
@@ -144,11 +150,17 @@ class Point:
         self.y = y
         self.id = None
         self.StringVar = StringVar(value=self.__repr__())
+        
+    def __iter__(self):
+        yield self.x
+        yield self.y
 
     def __repr__(self):
         return str((self.x, self.y))
         
     def __add__(self, other):
+        if isinstance(other, tuple):
+            return Point(self.x + other[0], self.y + other[1])
         return Point(self.x + other.x, self.y + other.y)
         
     def __sub__(self, other):
@@ -168,17 +180,23 @@ class Point:
     def magnitude(self):
         return math.hypot(self.x, self.y)
        
-    def previewToOtherCanvas(self, canvas=None):
+    def previewToOtherCanvas(self, canvas=None, **kwargs):
+        defaultKWArgs = {
+            "scaleFactor": 1
+        }
+        
+        defaultKWArgs.update(kwargs)
+        
         r = Point.pointRadius.get()
         
-        zoom = Drawing.globalVars.zoom.get()/100
+        scaleFactor = defaultKWArgs["scaleFactor"]
         
         pX = self.x
         pY = self.y
         
         canvas = Point.canvas if canvas is None else canvas
         
-        canvas.create_oval((pX - r) * zoom, (pY - r) * zoom, (pX + r) * zoom, (pY + r) * zoom, tags="point", fill="blue", outline="")
+        canvas.create_oval((pX - r) * scaleFactor, (pY - r) * scaleFactor, (pX + r) * scaleFactor, (pY + r) * scaleFactor, tags="point", fill="blue", outline="")
         
     def setPosition(self, x, y):
         self.x = x
@@ -228,10 +246,16 @@ class CenterMark(Point):
         super().__init__(x, y)
         self.size = size
         
-    def previewToOtherCanvas(self, canvas=None):
+    def previewToOtherCanvas(self, canvas=None, **kwargs):
+        defaultKWArgs = {
+            "scaleFactor": 1
+        }
+        
+        defaultKWArgs.update(kwargs)
+        
         size = self.size
         
-        zoom = Drawing.globalVars.zoom.get()/100
+        scaleFactor = defaultKWArgs["scaleFactor"]
         
         pX = self.x
         pY = self.y
@@ -239,11 +263,11 @@ class CenterMark(Point):
         canvas = Point.canvas if canvas is None else canvas
         
         canvas.create_line(
-            (pX - size/2) * zoom, pY * zoom,
-            (pX + size/2) * zoom, pY * zoom,
-            pX * zoom, pY * zoom,
-            pX * zoom, (pY - size/2) * zoom,
-            pX * zoom, (pY + size/2) * zoom,
+            (pX - size/2) * scaleFactor, pY * scaleFactor,
+            (pX + size/2) * scaleFactor, pY * scaleFactor,
+            pX * scaleFactor, pY * scaleFactor,
+            pX * scaleFactor, (pY - size/2) * scaleFactor,
+            pX * scaleFactor, (pY + size/2) * scaleFactor,
             tags=("point", "center")
         )
         
@@ -283,8 +307,8 @@ class Drawing:
     def __init__(self, type_="Drawing", *points, **kwargs):
         self.center = None
         self.mode = IntVar(value=0 if not "mode" in kwargs else kwargs["mode"])
-        self._points = [point for point in points if not point is None]
-        self.type = type_
+        self._points = [point for point in points if point is not None]
+        self.type = StringVar(value=type_)
         
         self.dashGapLength = IntVar(value=4)
         self.dashLength = IntVar(value=4)
@@ -304,7 +328,7 @@ class Drawing:
                 PropertyData(self, "OutlineType", variable=self.outlineType, options=["solid", "dash"], useOptions=True),
                 PropertyData(self, "OutlineWidth", variable=self.outlineWidth),
             ],
-            Data=[PropertyData(self, "Type", self.type, readOnly=True)],
+            Data=[PropertyData(self, "Type", variable=self.type, readOnly=True)],
             Transform=[PropertyData(self, "TopLeft", variable=self.topLeft.StringVar)],
         )
         
@@ -344,8 +368,6 @@ class Drawing:
                     y = float(match.group(2))
                     
                     self.moveTo(x, y)
-                else:
-                    pass
             elif name == "OutlineColor" or name == "OutlineType" or name == "OutlineWidth" or name == "DashGapLength" or name == "DashLength":
                 self.redraw()
         
@@ -376,7 +398,7 @@ class Drawing:
         zoom = Drawing.globalVars.zoom.get()/100
 
         if not self.id: return None
-        return tuple(map(lambda x: round(x / zoom), Drawing.canvas.bbox(self.id)))
+        return tuple(map(lambda x: x / zoom, Drawing.canvas.bbox(self.id)))
         
     def delete(self):
         if self.id != None: Drawing.canvas.delete(self.id)
@@ -443,13 +465,11 @@ class Drawing:
     def previewToOtherCanvas(self, canvas=None):
         canvas = Drawing.canvas if canvas is None else canvas
         
-        self._onDraw(canvas, assignId=False)
+        self._onDraw(canvas, assignId=False, scaleFactor=1)
         
         self.previewPointsToOtherCanvas(canvas)
     
     def redraw(self):
-        # print(self.outlineType.get())
-        
         canvas = Drawing.canvas
         if self.id: Drawing.canvas.delete(self.id)
         
@@ -508,19 +528,6 @@ class Drawing:
                 if Drawing.globalVars.showCenter.get(): self.center.previewToOtherCanvas(canvas)
 
     @staticmethod
-    def convertToAbsoluteSize(value=0, unit="px"): 
-        globalVars = Drawing.globalVars
-        ppi = globalVars.ppi.get()
-        
-        if unit == "in":
-            return value * ppi
-        elif unit == "cm":
-            return value * ppi/2.54
-        elif unit == "mm":
-            return value * ppi/25.4
-        return value
-
-    @staticmethod
     def bboxAll():
         minX = math.inf
         minY = math.inf
@@ -537,19 +544,6 @@ class Drawing:
             maxY = max(maxY, bbox[3])
         
         return (minX, minY, maxX, maxY)
-        
-    @staticmethod
-    def _convertPx(value=0, unit="px"):
-        globalVars = Drawing.globalVars
-        ppi = globalVars.ppi.get()
-        
-        if unit == "in":
-            return float(Decimal(str(value)) / Decimal(str(ppi)))
-        elif unit == "cm":
-            return float(Decimal(str(value)) / (Decimal(str(ppi)) / Decimal("2.54")))
-        elif unit == "mm":
-            return float(Decimal(str(value)) / (Decimal(str(ppi)) / Decimal("25.4")))
-        return value
         
     @staticmethod
     def getAllPoints():
@@ -592,7 +586,7 @@ class Circle(Drawing):
             toolMode = self.mode.get()
             
             if name == "Radius":
-                self.absoluteRadius.set(Drawing.convertToAbsoluteSize(self.radius.get(), self.unit.get()))
+                self.absoluteRadius.set(convertToAbsoluteSize(self.radius.get(), self.unit.get()))
                 
                 r = self.absoluteRadius.get()
                 
@@ -617,7 +611,7 @@ class Circle(Drawing):
         
         self.properties.onChange.append(propertyChanged)
         
-        Drawing.globalVars.unit.trace_add("write", lambda a, b, c: self.radius.set(Drawing._convertPx(self.absoluteRadius.get(), self.unit.get())))
+        Drawing.globalVars.unit.trace_add("write", lambda *args: self.radius.set(convertPx(self.absoluteRadius.get(), self.unit.get())))
     
     def absoluteSize(self):
         minX = self.center.x - self.absoluteRadius.get()
@@ -629,7 +623,8 @@ class Circle(Drawing):
         
     def _onDraw(self, canvas=None, **kwargs):  
         defaultKWArgs = {
-            "assignId": True
+            "assignId": True,
+            "scaleFactor": 1
         }
         
         defaultKWArgs.update(kwargs)
@@ -657,6 +652,13 @@ class Circle(Drawing):
             self.center.x + r,
             self.center.y + r
         )
+        
+        scaleFactor = defaultKWArgs["scaleFactor"]
+        
+        minX *= scaleFactor
+        minY *= scaleFactor
+        maxX *= scaleFactor
+        maxY *= scaleFactor
         
         cnf = self.baseCnf()
         
@@ -688,7 +690,7 @@ class Circle(Drawing):
                 y1 = nextPoint.y
                 
                 self.absoluteRadius.set(math.hypot(x1 - x0, y1 - y0))
-                self.radius.set(Drawing._convertPx(self.absoluteRadius.get(), self.unit.get()))
+                self.radius.set(convertPx(self.absoluteRadius.get(), self.unit.get()))
                 
                 x0 *= zoom
                 y0 *= zoom
@@ -707,10 +709,10 @@ class Circle(Drawing):
                 y1 = nextPoint.y
                 
                 # self.absoluteRadius.set(math.hypot(x1 - x0, y1 - y0))
-                # self.radius.set(Drawing._convertPx(self.absoluteRadius.get(), self.unit.get()))
+                # self.radius.set(convertPx(self.absoluteRadius.get(), self.unit.get()))
                 
                 self.absoluteRadius.set(math.hypot(x1 - x0, y1 - y0) / 2)
-                self.radius.set(Drawing._convertPx(self.absoluteRadius.get(), self.unit.get()))
+                self.radius.set(convertPx(self.absoluteRadius.get(), self.unit.get()))
                 
                 x0 *= zoom
                 y0 *= zoom
@@ -739,15 +741,16 @@ class TextDrawing(Drawing):
         self.justify = StringVar(value="left")
         self.text = StringVar(value="")
         self._insertionPoint = False
+        self.fontFamily = StringVar(value="Arial")
+        self.fontSize = IntVar(value=14)
         
         self.kwargs = {
-            "font": ("Arial", 14),
             "anchor": "nw"
         }
         
         self.properties.update(
             Text=[
-                PropertyData(self, "Justify", variable=self.justify, options=["left", "center", "right"], useOptions=True, readOnly=True),
+                PropertyData(self, "Justify", variable=self.justify, options=["left", "center", "right"], useOptions=True),
                 PropertyData(self, "Text", variable=self.text)
             ]
         )
@@ -758,7 +761,7 @@ class TextDrawing(Drawing):
             self.redraw()
             self._update()
         
-        def textUpdate(a, b, c):
+        def textUpdate(*args):
             self._update()
             
         self.properties.onChange.append(propertyChanged)
@@ -767,7 +770,8 @@ class TextDrawing(Drawing):
 
     def _onDraw(self, canvas=None, **kwargs):   
         defaultKWArgs = {
-            "assignId": True
+            "assignId": True,
+            "scaleFactor": 1
         }
         
         defaultKWArgs.update(kwargs)
@@ -776,18 +780,18 @@ class TextDrawing(Drawing):
         
         p = self._points
         
-        zoom = Drawing.globalVars.zoom.get()/100
-
+        scaleFactor = defaultKWArgs["scaleFactor"]
+        
         if len(p) <= 0: return
         
         x = p[0].x 
         y = p[0].y
         
         if defaultKWArgs["assignId"]:
-            self.id = canvas.create_text(x, y, tags="drawing")
+            self.id = canvas.create_text(x, y, tags="drawing", justify=self.justify.get(), font=(self.fontFamily.get(), self.fontSize.get() * scaleFactor), **self.kwargs)
             self._update(canvas)
         else:
-            canvas.create_text(x, y, tags="drawing", text=self.text.get(), justify=self.justify.get(), **self.kwargs)
+            canvas.create_text(x, y, tags="drawing", text=self.text.get(), justify=self.justify.get(), font=(self.fontFamily.get(), self.fontSize.get() * scaleFactor), **self.kwargs)
         
     def _keyPress(self, event):
         keysym = event.keysym
@@ -857,11 +861,12 @@ class Line(Drawing):
         self.absoluteLength = DoubleVar(value=0)
         self.length = DoubleVar(value=0)
         
-        Drawing.globalVars.unit.trace_add("write", lambda a, b, c: self.length.set(Drawing._convertPx(self.absoluteLength.get(), self.unit.get())))
+        Drawing.globalVars.unit.trace_add("write", lambda a, b, c: self.length.set(convertPx(self.absoluteLength.get(), self.unit.get())))
         
     def _onDraw(self, canvas=None, **kwargs):   
         defaultKWArgs = {
-            "assignId": True
+            "assignId": True,
+            "scaleFactor": 1
         }
         
         defaultKWArgs.update(kwargs)
@@ -873,10 +878,12 @@ class Line(Drawing):
         
         canvas.delete("prediction")
         
-        x1 = p[0].x
-        y1 = p[0].y
-        x2 = p[1].x
-        y2 = p[1].y
+        scaleFactor = defaultKWArgs["scaleFactor"]
+        
+        x1 = p[0].x * scaleFactor
+        y1 = p[0].y * scaleFactor
+        x2 = p[1].x * scaleFactor
+        y2 = p[1].y * scaleFactor
         
         cnf = self.baseCnf()
    
@@ -902,7 +909,7 @@ class Line(Drawing):
             y2 = nextPoint.y
             
             absoluteLength = (p[0] - nextPoint).magnitude()
-            length = Drawing._convertPx(absoluteLength, self.unit.get())
+            length = convertPx(absoluteLength, self.unit.get())
             
             self.absoluteLength.set(absoluteLength)
             self.length.set(length)
@@ -913,9 +920,43 @@ class Rectangle(Drawing):
     def __init__(self, *points, **kwargs):
         super().__init__("Rectangle", *points, **kwargs)
         
+        self.length = DoubleVar(value=0)
+        self.width = DoubleVar(value=0)
+        
+        self.absoluteLength = DoubleVar(value=0)
+        self.absoluteWidth = DoubleVar(value=0)
+        
+        self.startEndDiff = Point(0, 0)
+        
+        self.properties.update(
+            Dimensions=[
+                PropertyData(self, "Length", variable=self.length, useUnit=True),
+                PropertyData(self, "Width", variable=self.width, useUnit=True),
+            ],
+        )
+        
+        def propertyChanged(prop, value=""):
+            name = prop.name
+            
+            if name == "Length":
+                self.absoluteLength.set(convertToAbsoluteSize(self.length.get(), self.unit.get()))
+                self.redraw()
+            elif name == "Width":
+                self.absoluteWidth.set(convertToAbsoluteSize(self.width.get(), self.unit.get()))
+                self.redraw()
+                
+        self.properties.onChange.append(propertyChanged)
+        
+        def unitChanged(*args):
+            self.length.set(convertPx(self.absoluteLength.get(), self.unit.get()))
+            self.width.set(convertPx(self.absoluteWidth.get(), self.unit.get()))
+            
+        Drawing.globalVars.unit.trace_add("write", unitChanged)
+        
     def _onDraw(self, canvas=None, **kwargs):   
         defaultKWArgs = {
-            "assignId": True
+            "assignId": True,
+            "scaleFactor": 1
         }
         
         defaultKWArgs.update(kwargs)
@@ -927,18 +968,40 @@ class Rectangle(Drawing):
         
         Drawing.canvas.delete("prediction")
         
-        if n == 2:
-            x1 = p[0].x
-            y1 = p[0].y
-            x2 = p[1].x
-            y2 = p[1].y
-            
-            cnf = self.baseCnf()
-            
-            if defaultKWArgs["assignId"]:
-                self.id = canvas.create_rectangle(x1, y1, x2, y2, cnf)
-            else: 
-                canvas.create_rectangle(x1, y1, x2, y2, cnf)
+        scaleFactor = defaultKWArgs["scaleFactor"]
+
+        startPoint = p[0]
+        endPoint = p[2]
+        
+        startEndDiffX = endPoint.x - startPoint.x
+        startEndDiffY = endPoint.y - startPoint.y
+        
+        diffXSign = float(np.sign(startEndDiffX))
+        diffYSign = float(np.sign(startEndDiffY))
+        
+        length = self.absoluteLength.get()
+        width = self.absoluteWidth.get()
+        
+        p[1].setPosition(startPoint.x + length * diffXSign, startPoint.y)
+        endPoint.setPosition(startPoint.x + length * diffXSign, startPoint.y + width * diffYSign)
+        p[3].setPosition(startPoint.x, startPoint.y + width * diffYSign)
+        
+        startEndDiffX = endPoint.x - startPoint.x
+        startEndDiffY = endPoint.y - startPoint.y
+        
+        self.startEndDiff.setPosition(startEndDiffX, startEndDiffY)
+        
+        x1 = startPoint.x * scaleFactor
+        y1 = startPoint.y * scaleFactor
+        x2 = endPoint.x * scaleFactor
+        y2 = endPoint.y * scaleFactor
+        
+        cnf = self.baseCnf()
+        
+        if defaultKWArgs["assignId"]:
+            self.id = canvas.create_rectangle(x1, y1, x2, y2, cnf)
+        else: 
+            canvas.create_rectangle(x1, y1, x2, y2, cnf)
         
     def _onPredict(self, nextPoint):
         p = self._points
@@ -953,6 +1016,14 @@ class Rectangle(Drawing):
             y1 = p[0].y
             x2 = nextPoint.x
             y2 = nextPoint.y
+            
+            self.startEndDiff.setPosition(x2 - x1, y2 - y1)
+            
+            self.absoluteLength.set(abs(self.startEndDiff.x))
+            self.absoluteWidth.set(abs(self.startEndDiff.y))
+            
+            self.length.set(convertPx(self.absoluteLength.get(), self.unit.get()))
+            self.width.set(convertPx(self.absoluteWidth.get(), self.unit.get()))
             
             Drawing.canvas.create_rectangle(x1 * zoom, y1 * zoom, x2 * zoom, y2 * zoom, tags="prediction", outline="blue")
 
@@ -985,7 +1056,7 @@ class Arc(Drawing):
             
             pR = Drawing.pointRadius.get()
             
-            if name == "Radius": self.absoluteRadius.set(Drawing.convertToAbsoluteSize(self.radius.get(), self.unit.get()))
+            if name == "Radius": self.absoluteRadius.set(convertToAbsoluteSize(self.radius.get(), self.unit.get()))
                 
             r = self.absoluteRadius.get()
             
@@ -998,16 +1069,17 @@ class Arc(Drawing):
                 self.center.x + r * math.cos(math.radians(self.end.get())),
                 self.center.y - r * math.sin(math.radians(self.end.get()))
             )
-                
+
             self.redraw()
         
         self.properties.onChange.append(propertyChanged)
         
-        Drawing.globalVars.unit.trace_add("write", lambda a, b, c: self.radius.set(Drawing._convertPx(self.absoluteRadius.get(), self.unit.get())))
+        Drawing.globalVars.unit.trace_add("write", lambda a, b, c: self.radius.set(convertPx(self.absoluteRadius.get(), self.unit.get())))
         
     def _onDraw(self, canvas=None, **kwargs):   
         defaultKWArgs = {
-            "assignId": True
+            "assignId": True,
+            "scaleFactor": 1
         }
         
         defaultKWArgs.update(kwargs)
@@ -1030,7 +1102,14 @@ class Arc(Drawing):
             self.center.y + r
         )
         
-        # self.extent = self.end.get() - self.start.get()
+        scaleFactor = defaultKWArgs["scaleFactor"]
+        
+        minX *= scaleFactor
+        minY *= scaleFactor
+        maxX *= scaleFactor
+        maxY *= scaleFactor
+        
+        self.extent = fixDegrees(self.end.get() - self.start.get())
         
         cnf = self.baseCnf()
         
@@ -1062,7 +1141,7 @@ class Arc(Drawing):
             y1 = nextPoint.y
             
             self.absoluteRadius.set(math.sqrt((x1 - x0)**2 + (y1 - y0)**2))
-            self.radius.set(Drawing._convertPx(self.absoluteRadius.get(), self.unit.get()))
+            self.radius.set(convertPx(self.absoluteRadius.get(), self.unit.get()))
             
             x0 *= zoom
             y0 *= zoom
@@ -1071,20 +1150,54 @@ class Arc(Drawing):
                 
             Drawing.canvas.create_line(x0, y0, x1, y1, tags="prediction", fill="blue", dash=(16, 16), width=1, arrow=BOTH, arrowshape=globalVars.dimensionArrowShape)
         elif Drawing.toolActivatedCounter.get() == 2:
-            minX, minY, maxX, maxY = (
+            def drawArcArrow(canvas, x0, y0, x1, y1, startDeg, extentDeg, **kwargs):
+                lineKWArgs = dict(kwargs)
+                
+                if "outline" in lineKWArgs:
+                    lineKWArgs["fill"] = kwargs["outline"]
+                    del lineKWArgs["outline"]
+                
+                canvas.create_arc(x0, y0, x1, y1, start=startDeg, extent=extentDeg, style="arc", **kwargs)
+                
+                cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
+                
+                endRad = math.radians(startDeg + extentDeg)
+                endX = cx + rx * math.cos(endRad)
+                endY = cy - ry * math.sin(endRad)
+                
+                stepDeg = -1 if extentDeg > 0 else 1
+                prevRad = math.radians(startDeg + extentDeg + stepDeg)
+                prevX = cx + rx * math.cos(prevRad)
+                prevY = cy - ry * math.sin(prevRad)
+                
+                canvas.create_line(prevX, prevY, endX, endY, arrow=LAST, arrowshape=globalVars.dimensionArrowShape, **lineKWArgs)
+                
+            previewArcPos = (
                 self.center.x - r,
                 self.center.y - r,
                 self.center.x + r,
                 self.center.y + r
             )
             
-            minX *= zoom
-            minY *= zoom
-            maxX *= zoom
-            maxY *= zoom
+            angleDisplayScale = 1/3
+            
+            angleDisplayPos = (
+                self.center.x - r * angleDisplayScale,
+                self.center.y - r * angleDisplayScale,
+                self.center.x + r * angleDisplayScale,
+                self.center.y + r * angleDisplayScale
+            )
+            
+            previewArcPos = tuple(map(lambda coord: coord * zoom, previewArcPos))
+            angleDisplayPos = tuple(map(lambda coord: coord * zoom, angleDisplayPos))
+            
+            x0 = self.center.x
+            y0 = self.center.y
             
             x1 = p[0].x
             y1 = p[0].y
+            
             x2 = nextPoint.x
             y2 = nextPoint.y
             
@@ -1094,27 +1207,59 @@ class Arc(Drawing):
             startDiffY = self.center.y - y1
             endDiffY = self.center.y - y2
             
-            self.start.set(math.degrees(math.atan2(startDiffY, startDiffX)))
+            startAngle = fixDegrees(math.degrees(math.atan2(startDiffY, startDiffX)))
+            endAngle = fixDegrees(math.degrees(math.atan2(endDiffY, endDiffX)))
             
-            if Drawing.globalVars.snapToRotate.get():
-                self.end.set(Drawing.angleIncrement.get() * round(math.degrees(math.atan2(endDiffY, endDiffX)) / Drawing.angleIncrement.get()))
-            else:
-                self.end.set(math.degrees(math.atan2(endDiffY, endDiffX)))
+            angleIncrement = Drawing.angleIncrement.get()
+
+            if Drawing.globalVars.snapToRotate.get(): endAngle = angleIncrement * round(endAngle / angleIncrement) + startAngle % angleIncrement
+            
+            endAngle = fixDegrees(endAngle)
+            
+            self.start.set(startAngle)  
+            self.end.set(endAngle)
                 
-            self.extent = self.end.get() - self.start.get()
-            
-            if self.extent > 180:
-                self.extent -= 360
-            elif self.extent <= -180:
-                self.extent += 360
+            self.extent = fixDegrees(self.end.get() - self.start.get())
                 
             pX = self.center.x + r * math.cos(math.radians(self.end.get())) - pR
             pY = self.center.y - r * math.sin(math.radians(self.end.get())) - pR
             
+            textAngle = (2 * self.start.get() + self.extent) / 2
+            
+            textPosX = self.center.x + r * angleDisplayScale * math.cos(math.radians(textAngle))
+            textPosY = self.center.y - r * angleDisplayScale * math.sin(math.radians(textAngle))
+            
             pX *= zoom
             pY *= zoom
+            
+            x0 *= zoom
+            y0 *= zoom
+            
+            x1 *= zoom
+            y1 *= zoom
+            
+            x2 *= zoom
+            y2 *= zoom
+            
+            textPosX *= zoom
+            textPosY *= zoom
                 
-            Drawing.canvas.create_arc(minX, minY, maxX, maxY, start=self.start.get(), extent=self.extent, tags="prediction", outline="blue", style="arc")
+            Drawing.canvas.create_line(x0, y0, x1, y1, tags="prediction", fill="blue", dash=(16, 16), width=1, arrow=LAST, arrowshape=globalVars.dimensionArrowShape) # start line
+            Drawing.canvas.create_line(x0, y0, pX, pY, tags="prediction", fill="blue", dash=(16, 16), width=1) # end line
+            
+            Drawing.canvas.create_arc(*previewArcPos, start=startAngle, extent=self.extent, tags="prediction", outline="blue", style="arc") # main arc
+            drawArcArrow(Drawing.canvas, *angleDisplayPos, startAngle, self.extent, tags="prediction", outline="blue") # for angle display
+            
+            Drawing.canvas.create_text(
+                textPosX, 
+                textPosY, 
+                text=self.extent, 
+                tags="prediction", fill="blue", 
+                font=("Arial", 14),
+                angle=textAngle - 90,
+                anchor="s"
+            )
+            
             Drawing.canvas.moveto("pointPosition", pX, pY)
         
 class Dimension:
@@ -1125,8 +1270,9 @@ class Dimension:
     
     def __init__(self, type_="Dimension", **kwargs):
         canvas = Dimension.canvas
+        globalVars = Dimension.globalVars
         
-        self.type = type_
+        self.type = StringVar(value=type_)
         self.absoluteSize = DoubleVar(value=0)
         self.annotationIds = []
         self.drawing = None # drawing to reference
@@ -1134,14 +1280,35 @@ class Dimension:
         self._points = []
         self.referencePoint = None # point to reference
         
-        # def unitChanged(a, b, c):
-            # text = [i for i in self.annotationIds if canvas.type(i) == "text"]
-            # if len(text) <= 0: return
-            # text = text[0]
-            
-            # canvas.itemconfig(text, text=f"{round(Dimension._convertPx(self.absoluteSize.get(), Dimension.globalVars.unit.get()), 4)}")
+        self.color = StringVar(value="red")
+        self.customLabel = StringVar(value="")
+        self.outlineWidth = IntVar(value=2)
+        self.useCustomLabel = BooleanVar(value=False)
+        self.unit = StringVar(value=globalVars.unit.get())
         
-        Dimension.globalVars.unit.trace_add("write", self._unitChanged)
+        self.properties = Properties(
+            Appearance=[
+                PropertyData(self, "Color", variable=self.color),
+                PropertyData(self, "CustomLabel", variable=self.customLabel),
+                PropertyData(self, "OutlineWidth", variable=self.outlineWidth),
+                PropertyData(self, "UseCustomLabel", variable=self.useCustomLabel, makePropertiesReadOnlyIf={False: ["CustomLabel"]}),
+            ],
+            Data=[
+                PropertyData(self, "AbsoluteSize", variable=self.absoluteSize, readOnly=True),
+                PropertyData(self, "Type", variable=self.type, readOnly=True),
+            ],
+        )
+        
+        def propertyChanged(prop, value=""):
+            name = prop.name
+            lastValue = prop.lastValue
+            
+            if name == "Color" or name == "OutlineWidth" or name == "UseCustomLabel" or name == "CustomLabel":
+                self.redraw()
+        
+        self.properties.onChange.append(propertyChanged)
+        
+        globalVars.unit.trace_add("write", self._unitChanged)
         
     def addPoint(self, point):
         self._points.append(point)
@@ -1291,8 +1458,12 @@ class LinearDimension(Dimension):
         y1 = None
         x2 = None
         y2 = None
-        absoluteSizeX = None
-        absoluteSizeY = None
+        absoluteSizeX = 0
+        absoluteSizeY = 0
+        absoluteSize = 0
+        
+        textPosX = 0
+        textPosY = 0
         
         line1 = None
         line2 = None
@@ -1301,10 +1472,15 @@ class LinearDimension(Dimension):
         text = None
         
         line1StartX = line1StartY = line1EndY = line2StartX = line2StartY = line2EndY = line1EndX = line2EndX = None
+        arrow1StartX = arrow1StartY = arrow1EndY = arrow2StartX = arrow2StartY = arrow2EndY = arrow1EndX = arrow2EndX = None
+        
+        drawingType = ""
+        dimensionLabel = ""
         
         if dimensionSelectionType == "Drawing":
             if self.drawing:
-                match self.drawing.type:
+                drawingType = self.drawing.type.get()
+                match drawingType:
                     case "Circle":
                         _p = self.drawing.getPoints()
                         x1 = self.drawing.center.x - self.drawing.absoluteRadius.get()
@@ -1335,7 +1511,7 @@ class LinearDimension(Dimension):
         diffX = position.x - midpointX
         diffY = position.y - midpointY
         
-        textAngle = 0
+        angle = 0
         
         customFont = font.Font(
             family=globalVars.dimensionTextFontFamily.get(), 
@@ -1345,9 +1521,9 @@ class LinearDimension(Dimension):
         )
         
         arrowWidth = arrowShape[2]
-        
+
         if self.drawing:
-            match self.drawing.type:
+            match drawingType:
                 case "Circle": 
                     if abs(diffX) > abs(diffY): x1 = x2 = self.drawing.center.x # sideward
                     elif abs(diffX) < abs(diffY): y1 = y2 = self.drawing.center.y # upward / downward
@@ -1366,9 +1542,11 @@ class LinearDimension(Dimension):
             else: p = position.x + np.sign(position.x - x1) * arrowWidth * 2 #left
                 
             if absoluteSizeY > 0:
+                absoluteSize = absoluteSizeY
+                
                 self.absoluteSize.set(absoluteSizeY)
-            
-                if dimensionSelectionType == "Point" or self.drawing.type == "Line" or self.drawing.type == "Arc":
+
+                if dimensionSelectionType == "Point" or drawingType == "Line" or drawingType == "Arc":
                     line1StartX = x1
                     line1StartY = line1EndY = y1
                     
@@ -1383,25 +1561,52 @@ class LinearDimension(Dimension):
                         
                 line1EndX = line2EndX = p
                         
-                line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=2)
-                line2 = canvas.create_line(line2StartX * scaleFactor, line2StartY * scaleFactor, line2EndX * scaleFactor, line2EndY * scaleFactor, tags=tags, fill=fill, width=2)
+                line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get())
+                line2 = canvas.create_line(line2StartX * scaleFactor, line2StartY * scaleFactor, line2EndX * scaleFactor, line2EndY * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get())
                     
-                textAngle = math.degrees(math.atan2(-diffX, 0))
-                    
-                text = canvas.create_text(position.x * scaleFactor, midpointY * scaleFactor, text=f"{round(Dimension._convertPx(absoluteSizeY, unit), 4)}", tags=tags, fill=fill, font=customFont, angle=textAngle)
-                textBbox = canvas.bbox(text)
+                angle = math.degrees(math.atan2(-diffX, 0))
+                
+                textPosX = position.x
+                textPosY = midpointY
+                
+                arrow1StartX = arrow2StartX = position.x
+
+                arrow1StartY = min(y1, y2)
+                arrow2StartY = max(y1, y2)
+                
+                if self.useCustomLabel.get(): dimensionLabel = self.customLabel.get()
+                else: dimensionLabel = f"{round(Dimension._convertPx(absoluteSize, unit), 4)}"
+                
+                text = canvas.create_text(
+                    textPosX * scaleFactor, 
+                    textPosY * scaleFactor, 
+                    text=dimensionLabel, 
+                    tags=tags, 
+                    fill=fill, 
+                    font=customFont, 
+                    angle=angle
+                )
+                
+                textWidth = customFont.measure(dimensionLabel) + 8
+                
+                textBbox = canvas.bbox(text)                
+                
+                # arrow1EndX = textPosX + textWidth / 2 * math.cos(math.radians(angle))
+                # arrow1EndY = textPosY - textWidth / 2 * math.sin(math.radians(angle))
                 
                 if min(y1, y2) * scaleFactor < textBbox[1] and max(y1, y2) * scaleFactor > textBbox[3]:
-                    arrow1 = canvas.create_line(position.x * scaleFactor, min(y1, y2) * scaleFactor, position.x * scaleFactor, textBbox[1], tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
-                    arrow2 = canvas.create_line(position.x * scaleFactor, max(y1, y2) * scaleFactor, position.x * scaleFactor, textBbox[3], tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
+                    arrow1 = canvas.create_line(position.x * scaleFactor, min(y1, y2) * scaleFactor, position.x * scaleFactor, textBbox[1], tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
+                    arrow2 = canvas.create_line(position.x * scaleFactor, max(y1, y2) * scaleFactor, position.x * scaleFactor, textBbox[3], tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
         elif abs(diffX) < abs(diffY): # upward / downward
             if absoluteSizeX > 0:
+                absoluteSize = absoluteSizeX
+                
                 self.absoluteSize.set(absoluteSizeX)
                 
                 if np.sign(diffX) == 1: p = position.y + np.sign(position.y - y2) * arrowWidth * 2 #right
                 else: p = position.y + np.sign(position.y - y1) * arrowWidth * 2 #left
                 
-                if dimensionSelectionType == "Point" or self.drawing.type == "Line" or self.drawing.type == "Arc":
+                if dimensionSelectionType == "Point" or drawingType == "Line" or drawingType == "Arc":
                     line1StartY = y1
                     line1StartX = line1EndX = x1
                     
@@ -1416,17 +1621,38 @@ class LinearDimension(Dimension):
                 
                 line1EndY = line2EndY = p
                 
-                line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=2)
-                line2 = canvas.create_line(line2StartX * scaleFactor, line2StartY * scaleFactor, line2EndX * scaleFactor, line2EndY * scaleFactor, tags=tags, fill=fill, width=2)
+                line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get())
+                line2 = canvas.create_line(line2StartX * scaleFactor, line2StartY * scaleFactor, line2EndX * scaleFactor, line2EndY * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get())
                 
-                textAngle = math.degrees(math.atan2(0, -diffY))
+                angle = math.degrees(math.atan2(0, -diffY))
                 
-                text = canvas.create_text(midpointX * scaleFactor,  position.y * scaleFactor, text=f"{round(Dimension._convertPx(absoluteSizeX, unit), 4)}", tags=tags, fill=fill, font=customFont, angle=textAngle)
+                textPosX = midpointX
+                textPosY = position.y
+                
+                arrow1StartX = min(x1, x2)
+                arrow1StartY = arrow2StartY = position.y
+                arrow2StartX = max(x1, x2)
+                
+                if self.useCustomLabel.get(): dimensionLabel = self.customLabel.get()
+                else: dimensionLabel = f"{round(Dimension._convertPx(absoluteSize, unit), 4)}"
+                
+                text = canvas.create_text(
+                    textPosX * scaleFactor, 
+                    textPosY * scaleFactor, 
+                    text=dimensionLabel, 
+                    tags=tags, 
+                    fill=fill, 
+                    font=customFont, 
+                    angle=angle
+                )
+                
+                textWidth = customFont.measure(dimensionLabel) + 8
+                
                 textBbox = canvas.bbox(text)                
                 
                 if min(x1, x2) * scaleFactor < textBbox[0] and max(x1, x2) * scaleFactor > textBbox[2]:
-                    arrow1 = canvas.create_line(min(x1, x2) * scaleFactor, position.y * scaleFactor, textBbox[0], position.y * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
-                    arrow2 = canvas.create_line(max(x1, x2)* scaleFactor, position.y * scaleFactor, textBbox[2], position.y * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
+                    arrow1 = canvas.create_line(min(x1, x2) * scaleFactor, position.y * scaleFactor, textBbox[0], position.y * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
+                    arrow2 = canvas.create_line(max(x1, x2) * scaleFactor, position.y * scaleFactor, textBbox[2], position.y * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
         
         if defaultKWArgs["assignId"]:
             self.annotationIds = [i for i in [line1, line2, arrow1, arrow2, text] if not i is None]
@@ -1500,9 +1726,13 @@ class AlignedDimension(Dimension):
         line1StartX = line1StartY = line1EndY = line2StartX = line2StartY = line2EndY = line1EndX = line2EndX = None
         arrow1StartX = arrow1StartY = arrow1EndY = arrow2StartX = arrow2StartY = arrow2EndY = arrow1EndX = arrow2EndX = None
         
+        drawingType = ""
+        
         if dimensionSelectionType == "Drawing":
             if self.drawing:
-                match self.drawing.type:
+                drawingType = self.drawing.type.get()
+                
+                match drawingType:
                     case "Circle":
                         _p = self.drawing.getPoints()
                         x1 = self.drawing.center.x - self.drawing.absoluteRadius.get()
@@ -1544,8 +1774,9 @@ class AlignedDimension(Dimension):
         arrowWidth = arrowShape[2]
         
         slope = 0
+        
         if self.drawing:
-            match self.drawing.type:
+            match drawingType:
                 case "Circle": 
                     if abs(diffX) > abs(diffY): x1 = x2 = self.drawing.center.x # sideward
                     elif abs(diffX) < abs(diffY): y1 = y2 = self.drawing.center.y # upward / downward
@@ -1597,8 +1828,8 @@ class AlignedDimension(Dimension):
         extensionX = arrowWidth * 2 * math.cos(math.atan2(normalRise, normalRun))
         extensionY = arrowWidth * 2 * math.sin(math.atan2(normalRise, normalRun))
             
-        line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, (line1EndX + extensionX) * scaleFactor, (line1EndY + extensionY) * scaleFactor, tags=tags, fill=fill, width=2)
-        line2 = canvas.create_line(line2StartX * scaleFactor, line2StartY * scaleFactor, (line2EndX + extensionX) * scaleFactor, (line2EndY + extensionY) * scaleFactor, tags=tags, fill=fill, width=2)
+        line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, (line1EndX + extensionX) * scaleFactor, (line1EndY + extensionY) * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get())
+        line2 = canvas.create_line(line2StartX * scaleFactor, line2StartY * scaleFactor, (line2EndX + extensionX) * scaleFactor, (line2EndY + extensionY) * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get())
 
         if math.isinf(slope): 
             angle = math.degrees(math.atan2(-diffX, 0))
@@ -1640,8 +1871,8 @@ class AlignedDimension(Dimension):
             arrow2EndX = textPosX - textWidth / 2 * math.cos(math.radians(angle)) * -np.sign(determinant)
             arrow2EndY = textPosY + textWidth / 2 * math.sin(math.radians(angle)) * -np.sign(determinant)
 
-            arrow1 = canvas.create_line(arrow1StartX * scaleFactor, arrow1StartY * scaleFactor, arrow1EndX * scaleFactor, arrow1EndY * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
-            arrow2 = canvas.create_line(arrow2StartX * scaleFactor, arrow2StartY * scaleFactor, arrow2EndX * scaleFactor, arrow2EndY * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
+            arrow1 = canvas.create_line(arrow1StartX * scaleFactor, arrow1StartY * scaleFactor, arrow1EndX * scaleFactor, arrow1EndY * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
+            arrow2 = canvas.create_line(arrow2StartX * scaleFactor, arrow2StartY * scaleFactor, arrow2EndX * scaleFactor, arrow2EndY * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
                 
         if defaultKWArgs["assignId"]:
             self.annotationIds = [i for i in [line1, line2, arrow1, arrow2, text] if not i is None]
@@ -1720,9 +1951,13 @@ class RadialDimension(Dimension):
             slant=globalVars.dimensionTextSlant.get()
         )
         
+        drawingType = ""
+        
         if dimensionSelectionType == "Drawing":
             if self.drawing:
-                if self.drawing.type == "Circle" or self.drawing.type == "Arc":
+                drawingType = self.drawing.type.get()
+                
+                if drawingType == "Circle" or drawingType == "Arc":
                     centerX = self.drawing.center.x
                     centerY = self.drawing.center.y
                     
@@ -1748,7 +1983,7 @@ class RadialDimension(Dimension):
                     # midpointX = (centerX + centerX + absoluteRadius * math.cos(math.radians(angle))) / 2
                     # midpointY = (centerY + centerY - absoluteRadius * math.sin(math.radians(angle))) / 2
                     
-                    if self.drawing.type == "Arc":
+                    if drawingType == "Arc":
                         start = self.drawing.start.get()
                         end = self.drawing.end.get()
                         
@@ -1781,8 +2016,8 @@ class RadialDimension(Dimension):
                         line1EndX = position.x - textWidth/2 * math.cos(math.radians(angle))
                         line1EndY = position.y + textHeight/2 * math.sin(math.radians(angle))
                         
-                        line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=2)
-                        arrow1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, centerX * scaleFactor, centerY * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
+                        line1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get())
+                        arrow1 = canvas.create_line(line1StartX * scaleFactor, line1StartY * scaleFactor, centerX * scaleFactor, centerY * scaleFactor, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
                     else:   
                         text = canvas.create_text(
                             midpointX * scaleFactor, 
@@ -1804,8 +2039,8 @@ class RadialDimension(Dimension):
                         arrow2EndY = (midpointY * scaleFactor - textWidth/2 * math.sin(math.radians(snappedAngle))) 
                         # arrow1 - center to text
                         # arrow2 - circumference to text
-                        arrow1 = canvas.create_line(centerX * scaleFactor, centerY * scaleFactor, arrow1EndX, arrow1EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
-                        arrow2 = canvas.create_line(arrow2StartX * scaleFactor, arrow2StartY * scaleFactor, arrow2EndX, arrow2EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
+                        arrow1 = canvas.create_line(centerX * scaleFactor, centerY * scaleFactor, arrow1EndX, arrow1EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
+                        arrow2 = canvas.create_line(arrow2StartX * scaleFactor, arrow2StartY * scaleFactor, arrow2EndX, arrow2EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
         
         if defaultKWArgs["assignId"]:
             self.annotationIds = [i for i in [line1, line2, arrow1, arrow2, text] if not i is None]
@@ -1894,9 +2129,13 @@ class DiametricDimension(Dimension):
             slant=globalVars.dimensionTextSlant.get()
         )
         
+        drawingType = ""
+        
         if dimensionSelectionType == "Drawing":
             if self.drawing:
-                if self.drawing.type == "Circle" or self.drawing.type == "Arc":
+                drawingType = self.drawing.type.get()
+                
+                if drawingType == "Circle" or drawingType == "Arc":
                     centerX = self.drawing.center.x
                     centerY = self.drawing.center.y
                     
@@ -1919,7 +2158,7 @@ class DiametricDimension(Dimension):
                     
                     snappedAngle = angle
                     
-                    if self.drawing.type == "Arc":
+                    if drawingType == "Arc":
                         start = self.drawing.start.get()
                         end = self.drawing.end.get()
                         
@@ -1955,9 +2194,9 @@ class DiametricDimension(Dimension):
                         line1EndX = position.x - textWidth/2 * math.cos(math.radians(snappedAngle))
                         line1EndY = position.y + textHeight/2 * math.sin(math.radians(snappedAngle))
                         
-                        arrow1 = canvas.create_line(arrow1StartX * scaleFactor, arrow1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=2, arrow=FIRST, arrowshape=arrowShape,)
+                        arrow1 = canvas.create_line(arrow1StartX * scaleFactor, arrow1StartY * scaleFactor, line1EndX * scaleFactor, line1EndY * scaleFactor, tags=tags, fill=fill, width=self.outlineWidth.get(), arrow=FIRST, arrowshape=arrowShape,)
                     else:
-                        if self.drawing.type == "Arc":
+                        if drawingType == "Arc":
                             start = self.drawing.start.get()
                             end = self.drawing.end.get()
                             
@@ -1999,10 +2238,10 @@ class DiametricDimension(Dimension):
                             arrow2EndX = (midpointX * scaleFactor + textWidth/2 * math.cos(math.radians(snappedAngle))) 
                             arrow2EndY = (midpointY * scaleFactor - textWidth/2 * math.sin(math.radians(snappedAngle))) 
                             
-                            arrow1 = canvas.create_line(arrow1StartX * scaleFactor, arrow1StartY * scaleFactor, arrow1EndX, arrow1EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
-                            arrow2 = canvas.create_line(arrow2StartX * scaleFactor, arrow2StartY * scaleFactor, arrow2EndX, arrow2EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=2)
+                            arrow1 = canvas.create_line(arrow1StartX * scaleFactor, arrow1StartY * scaleFactor, arrow1EndX, arrow1EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
+                            arrow2 = canvas.create_line(arrow2StartX * scaleFactor, arrow2StartY * scaleFactor, arrow2EndX, arrow2EndY, tags=tags, fill=fill, arrow=FIRST, arrowshape=arrowShape, width=self.outlineWidth.get())
                         
-                        if self.drawing.type == "Circle": draw()
+                        if drawingType == "Circle": draw()
                         elif abs(self.drawing.extent) >= 180: draw()
         
         if defaultKWArgs["assignId"]:

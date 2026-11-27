@@ -88,21 +88,6 @@ class PropertyChangedCommand(Command):
         lastValues = self.lastValues
         
         drawings = list(map(lambda prop: prop.object, properties))
-        
-        # print("values:", {key.object.id: value for key, value in values.items()})
-        # print("last values:", {key.object.id: value for key, value in lastValues.items()})
-        
-        # for prop in properties:
-            # if (prop not in values) or (prop not in lastValues): 
-                # continue
-            
-            # prop.value = targetValues[prop]
-            
-            # if prop.variable: 
-                # prop.variable.set(prop.value)
-            
-            # for f in prop.object.properties.onChange: 
-                # f(prop, prop.value)
                 
         for prop, value in targetValues.items():
             if prop not in targetValues: continue
@@ -112,10 +97,6 @@ class PropertyChangedCommand(Command):
             if prop.variable: 
                 prop.variable.set(prop.value)
                 
-            print(prop.object.id)
-            print(prop.value)
-            print("-"*10)
-            
             for f in prop.object.properties.onChange: 
                 f(prop, prop.value)
                 

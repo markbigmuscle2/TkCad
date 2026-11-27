@@ -2,6 +2,8 @@ class PropertyData:
     def __init__(self, Object=None, name="", value=None, **kwargs):
         self.lastValue = ""
         self.readOnly = kwargs["readOnly"] if "readOnly" in kwargs else False
+        self.makePropertiesReadOnlyIf = kwargs["makePropertiesReadOnlyIf"] if "makePropertiesReadOnlyIf" in kwargs else {} # property is read only if all conditions stated are true
+        
         self.variable = kwargs["variable"] if "variable" in kwargs else None
         self.useUnit = kwargs["useUnit"] if "useUnit" in kwargs else None
         self.valueUnit = kwargs["valueUnit"] if "valueUnit" in kwargs else None

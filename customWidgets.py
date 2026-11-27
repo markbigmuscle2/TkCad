@@ -152,6 +152,8 @@ class GlobalVariables:
 # other
 
 class ToolButton(Frame):
+    toolButtons = {}
+    
     def _update(self, **kwargs):
         if "image" in kwargs:
             self.image = kwargs["image"]
@@ -161,29 +163,39 @@ class ToolButton(Frame):
             self._label.config(text=kwargs["label"])
             
         if "command" in kwargs:
-            self.bind("<Button-1>", lambda event: kwargs["command"]())
-            self._canvas.bind("<Button-1>", lambda event: kwargs["command"]())
-            self._label.bind("<Button-1>", lambda event: kwargs["command"]())
+            self._command = kwargs["command"]
             
         if "state" in kwargs:
             self._state.set(kwargs["state"])
+            
+    def _btn1Clicked(self, event):
+        for toolButton in ToolButton.toolButtons[self.group]:
+            toolButton._update(state="normal")
+            
+        self._update(state="selected")
+        if self._command: self._command()
         
     def _mouseLeave(self, event):
-        self._update(state="normal")
+        if self._state.get() != "selected":
+            self._update(state="normal")
         
     def _motion(self, event):
-        self._update(state="hover")
+        if self._state.get() != "selected":
+            self._update(state="hover")
             
     def __init__(self, master=None, **kwargs):
         defaultKwArgs = { 
             "bg": "white",
             "hoverbg": "SystemActiveBorder",
+            "group": "_",
             "menu": None,
-            "state": "normal"
+            "state": "normal",
+            "tool": None
         }
+        
         defaultKwArgs.update(kwargs)
         
-        super().__init__(master)
+        super().__init__(master, highlightthickness=1, highlightbackground=defaultKwArgs["bg"])
         
         self._canvas = Canvas(self, width=40, height=40, highlightthickness=0)
         self._canvas.pack()
@@ -193,6 +205,25 @@ class ToolButton(Frame):
         
         self._dropdownArrow = None
         self._menu = None
+        self._command = None
+        
+        self.tool = defaultKwArgs["tool"]
+        self.group = defaultKwArgs["group"]
+        
+        if self.group not in ToolButton.toolButtons:
+            ToolButton.toolButtons[self.group] = []
+            
+        if self.tool:
+            def modeChanged(*args):
+                for toolButton in ToolButton.toolButtons[self.group]:
+                    toolButton._update(state="normal")
+                    
+                self._update(state="selected")
+                if self._command: self._command()
+                
+            self.tool.mode.trace_add("write", modeChanged)
+            
+        ToolButton.toolButtons[self.group].append(self)
         
         if defaultKwArgs["menu"]:
             self._dropdownArrow = Label(self, text="6", font=("Marlett", 10))
@@ -204,18 +235,23 @@ class ToolButton(Frame):
         
         self._state = StringVar(value=defaultKwArgs["state"])
         
-        def changeState():
+        def changeState(*args):
             if self._state.get() == "normal":
                 bg = defaultKwArgs["bg"] or defaultKwArgs["background"]
+                highlightBg = defaultKwArgs["bg"]
             elif self._state.get() == "hover":
                 bg = defaultKwArgs["hoverbg"] or defaultKwArgs["hoverbackground"]
+                highlightBg = defaultKwArgs["hoverbg"]
+            elif self._state.get() == "selected":
+                bg = defaultKwArgs["bg"] or defaultKwArgs["background"]
+                highlightBg = defaultKwArgs["hoverbg"]
                 
-            self.config(bg=bg)
+            self.config(bg=bg, highlightbackground=highlightBg)
             self._canvas.config(bg=bg)
             self._label.config(bg=bg)
             if self._dropdownArrow: self._dropdownArrow.config(bg=bg)
                 
-        self._state.trace_add("write", lambda *args: changeState())
+        self._state.trace_add("write", changeState)
         
         changeState()
         
@@ -224,6 +260,10 @@ class ToolButton(Frame):
         self.bind("<Motion>", self._motion)
         self._canvas.bind("<Motion>", self._motion)
         self._label.bind("<Motion>", self._motion)
+        
+        self.bind("<Button-1>", self._btn1Clicked)
+        self._canvas.bind("<Button-1>", self._btn1Clicked)
+        self._label.bind("<Button-1>", self._btn1Clicked)
         
         self.bind("<Leave>", self._mouseLeave)
             
@@ -260,7 +300,7 @@ class QuickAccessToolbarButton(ttk.Button):
 
 class MenuBar(Menu):
     globalVars = None
-    
+
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
         
@@ -286,13 +326,12 @@ class MenuBar(Menu):
         # fileMenu.add_command(label="Print", accelerator="Ctrl+P")
         
         # fileMenu.add_separator()
+
+        importMenu = ImportMenu(fileMenu)
+        exportMenu = ExportMenu(fileMenu)
         
-        # export
-        exportMenu = Menu(fileMenu, tearoff=0)
-        exportMenu.add_command(label="Image", command=lambda: ExportAsImageMenu(MenuBar.globalVars.root))
-        exportMenu.add_command(label="PDF", command=lambda: ExportAsPDF(MenuBar.globalVars.root))
-        
-        fileMenu.add_cascade(label="Export As...", menu=exportMenu)
+        fileMenu.add_cascade(label="Import", menu=importMenu)
+        fileMenu.add_cascade(label="Export As", menu=exportMenu)
         
         # edit
         editMenu = Menu(self, tearoff=0)
@@ -346,11 +385,14 @@ class PropertyMenu(Frame):
         self.inputs = {}
         
     def clearSelection(self):
+        from geometry import Drawing, Dimension
+        
         combinedSelections = set(tuple(self.selection))
         combinedSelections.update(self.lastSelection)
         
-        for drawing in combinedSelections:
-            drawing.selected.set(False)
+        for canvasObject in combinedSelections:
+            if isinstance(canvasObject, Drawing):
+                canvasObject.selected.set(False)
             
         self.selection = []
         self.lastSelection = []
@@ -386,7 +428,7 @@ class PropertyMenu(Frame):
         
         self.lastSelection = self.selection.copy()
         
-    def loadProperties(self, *drawings):
+    def loadProperties(self, *objects):
         globalVars = PropertyMenu.globalVars
         
         if self._propertyList is not None: 
@@ -395,9 +437,8 @@ class PropertyMenu(Frame):
 
         self.inputs.clear()
         
-        # 1. Group properties by category and name across all drawings
         properties = {}
-        for drawing in drawings:
+        for drawing in objects:
             for category in drawing.properties.get():
                 if category not in properties: 
                     properties[category] = {}
@@ -409,7 +450,6 @@ class PropertyMenu(Frame):
                     if prop.name not in group: group[prop.name] = []
                     group[prop.name].append(prop)
         
-        # 2. Build UI elements per category
         for category, groupProperties in properties.items():
             categorySection = Frame(self._propertyList)
             categorySection.pack(fill="x", expand=True)
@@ -425,10 +465,6 @@ class PropertyMenu(Frame):
                 variableList = [p.variable for p in propDataList]
                 valueList = [p.value for p in propDataList]
                 
-                # Determine entry type
-                if isinstance(Prop.variable, BooleanVar):
-                    continue  # Handled separately if needed
-                    
                 entryType = "Text"
                 if isinstance(Prop.variable, DoubleVar): 
                     entryType = "Double"
@@ -443,7 +479,8 @@ class PropertyMenu(Frame):
                     "relief": RIDGE
                 }
                 
-                # Instantiate appropriate widget
+                readOnly = Prop.readOnly
+
                 if Prop.useOptions:
                     dropdownConfig = {"borderwidth": 2, "relief": RIDGE}
                     widget = LabeledDropdown(
@@ -454,7 +491,16 @@ class PropertyMenu(Frame):
                         dropdownConfig=dropdownConfig, 
                         variables=variableList, 
                         values=valueList, 
-                        readOnly=Prop.readOnly
+                        readOnly=readOnly
+                    )
+                elif isinstance(Prop.variable, BooleanVar):
+                    widget = LabeledCheckbox(
+                        categoryContent, 
+                        label=Prop.name, 
+                        labelConfig=labelConfig,
+                        variables=variableList, 
+                        values=valueList, 
+                        readOnly=readOnly
                     )
                 else:
                     entryConfig = {"bd": 2, "relief": RIDGE}
@@ -466,55 +512,62 @@ class PropertyMenu(Frame):
                         entryConfig=entryConfig, 
                         variables=variableList, 
                         values=valueList, 
-                        readOnly=Prop.readOnly
+                        readOnly=readOnly
                     )
                     
                 widget.grid_columnconfigure(0, weight=1, uniform="_")
                 widget.grid_columnconfigure(1, weight=1, uniform="_")
                 
                 widget.pack(fill="x")
-                
-                # 3. Unified change handler with properly bound closure variables
+
                 values = {}
                 lastValues = {}
                 lastInputValue = widget.get()
                 
-                def make_on_change(p_prop, p_widget, p_prop_data_list, p_values, p_last_values, p_last_input_value):
+                def makeOnChange(pProp, pWidget, pPropDataList, pValues, pLastValues, pLastInputValue, pValueList):
                     def onChange(returnPressed):
-                        p_values.clear()
-                        inputValue = p_widget.get()
+                        pValues.clear()
+                        inputValue = pWidget.get()
                         
-                        for prop in p_prop_data_list:
+                        for prop in pPropDataList:
                             for f in prop.object.properties.onChange: 
                                 f(prop, inputValue)
                                 
                             prop.value = prop.variable.get() if prop.variable else inputValue
-                            p_values[prop] = prop.value
+                            pValues[prop] = prop.value
                             
-                        if returnPressed and p_last_values != p_values:
-                            print("add to history")
+                        if returnPressed and pLastValues != pValues:
                             PropertyMenu.globalVars.historyManager.do(PropertyChangedCommand(
-                                name=p_prop.name,
-                                properties=p_prop_data_list, 
-                                values=dict(p_values), 
-                                lastValues=dict(p_last_values),
+                                name=pProp.name,
+                                properties=pPropDataList, 
+                                values=dict(pValues), 
+                                lastValues=dict(pLastValues),
                                 inputValue=inputValue,
-                                lastInputValue=p_last_input_value
+                                lastInputValue=pLastInputValue
                             ))
                             
-                        for prop in p_prop_data_list:
+                        for prop in pPropDataList:
                             prop.lastValue = prop.value
                             
-                        p_last_values.clear()
-                        p_last_values.update(p_values)
+                        if pProp.makePropertiesReadOnlyIf:
+                            firstValue = pValueList[0] if len(pValueList) > 0 else None
+                            multipleValues = firstValue is not None and pValueList.count(firstValue) != len(pValueList)
+                            
+                            if not multipleValues:
+                                if firstValue in pProp.makePropertiesReadOnlyIf:
+                                    for propName in pProp.makePropertiesReadOnlyIf[firstValue]:
+                                        if not self.inputs[propName]: continue
+                                        self.inputs[propName].configure(readOnly=True)
+                            
+                        pLastValues.clear()
+                        pLastValues.update(pValues)
                         
                     return onChange
 
-                bound_onChange = make_on_change(Prop, widget, propDataList, values, lastValues, lastInputValue)
-                
-                # Initialize state and register callback
-                bound_onChange(False)
-                widget.onChange.append(bound_onChange)
+                boundOnChange = makeOnChange(Prop, widget, propDataList, values, lastValues, lastInputValue, valueList)
+
+                # boundOnChange(False)
+                widget.onChange.append(boundOnChange)
                 self.inputs[Prop.name] = widget
            
         self._propertyList.pack(anchor="n", fill="x")
@@ -529,7 +582,7 @@ class PropertyMenu(Frame):
         
         propertyInput.set(value)
         
-    def updateSelection(self, *drawings, **kwargs):
+    def updateSelection(self, *objects, **kwargs):
         from geometry import Drawing, Dimension
         defaultKwArgs = {
             "ctrlKeyPressed": False,
@@ -538,40 +591,41 @@ class PropertyMenu(Frame):
         
         defaultKwArgs.update(kwargs)
         
-        self.selection = [drawing for drawing in drawings if drawing is not None]
+        self.selection = [canvasObject for canvasObject in objects if canvasObject is not None]
         
         if not self.selecting.get(): return
         
         if defaultKwArgs["ctrlKeyPressed"]:
             temp = []
             
-            for drawing in self.selection:
-                if isinstance(drawing, Drawing):
-                    if drawing not in self.lastSelection:
-                        temp.append(drawing)
-                    drawing.selected.set(drawing not in self.lastSelection)
+            for canvasObject in self.selection:
+                if canvasObject not in self.lastSelection:
+                    temp.append(canvasObject)
+                        
+                if isinstance(canvasObject, Drawing):
+                    canvasObject.selected.set(canvasObject not in self.lastSelection)
 
-            for drawing in self.lastSelection:
-                if isinstance(drawing, Drawing):
-                    if drawing not in self.selection:
-                        drawing.selected.set(True)
-                        temp.append(drawing)
+            for canvasObject in self.lastSelection:
+                if canvasObject not in self.selection:
+                    if isinstance(canvasObject, Drawing):
+                        canvasObject.selected.set(True)
+                    temp.append(canvasObject)
                     
             self.selection = temp
         else:
-            for drawing in self.selection:
-                if isinstance(drawing, Drawing):
-                    drawing.selected.set(True)
+            for canvasObject in self.selection:
+                if isinstance(canvasObject, Drawing):
+                    canvasObject.selected.set(True)
                 
-        for drawing in self.tempSelection:
-            if isinstance(drawing, Drawing):
-                if drawing not in self.selection:
-                    drawing.selected.set(False)
+        for canvasObject in self.tempSelection:
+            if isinstance(canvasObject, Drawing):
+                if canvasObject not in self.selection:
+                    canvasObject.selected.set(False)
         
         if len(self.selection) == 0:
             self._topLabel.config(text="Properties")
         elif len(self.selection) == 1:
-            self._topLabel.config(text=f"Properties - {self.selection[0].type}")
+            self._topLabel.config(text=f"Properties - {self.selection[0].type.get()}")
         elif len(self.selection) > 1:
             self._topLabel.config(text=f"Properties - {len(self.selection)} items selected")
 
@@ -605,6 +659,7 @@ class Ribbon(Frame):
             "Select": ct.SelectTool(), 
             "Text": ct.TextTool()
         }
+        
         self.__toolSettings = None
         
         def handleTool(tool="Select"):
@@ -613,14 +668,17 @@ class Ribbon(Frame):
             globalVars.tool.set(tool)
             globalVars.toolObject = self.tools[tool]
             globalVars.toolObject.start()
-            
-            if globalVars.tool.get() != globalVars.lastTool.get():
-                if self.__toolSettings: self.__toolSettings.destroy()
+
+            if self.__toolSettings:
+                if globalVars.tool.get() != globalVars.lastTool.get():
+                    if self.__toolSettings: self.__toolSettings.destroy()
+                    
+                    self.__toolSettings = ToolSettings(self.__toolSettingsFrame, tool, self.tools[tool], bg=defaultKwArgs["bg"])
+                    self.__toolSettings.pack(anchor="w", fill="x", expand=True)
+                else:
+                    self.__toolSettings.update()
                 
-                self.__toolSettings = ToolSettings(self.__toolSettingsFrame, tool, self.tools[tool], bg=defaultKwArgs["bg"])
-                self.__toolSettings.pack(anchor="w", fill="x", expand=True)
-            
-            globalVars.lastTool.set(tool)
+                globalVars.lastTool.set(tool)
             
         for i in self.tools:
             self.tools[i].mode.trace_add("write", lambda a, b, c, i=i: handleTool(i))
@@ -641,6 +699,7 @@ class Ribbon(Frame):
         
         # ttk.Separator(quickAccessTb, style="Line.TSeparator", orient="vertical").pack(side=LEFT, fill="y", padx=2)
         
+        importBtn = QuickAccessToolbarButton(quickAccessTb, image=PhotoImage(file=SCRIPT_DIR / "images" / "import-icon.png"))
         exportBtn = QuickAccessToolbarButton(quickAccessTb, image=PhotoImage(file=SCRIPT_DIR / "images" / "export-icon.png"))
         
         ttk.Separator(quickAccessTb, style="Line.TSeparator", orient="vertical").pack(side=LEFT, fill="y", padx=2)
@@ -663,14 +722,18 @@ class Ribbon(Frame):
             hm.redo()
             update()
             
-        def export(event):
-            exportMenu = Menu(Ribbon.globalVars.root, tearoff=0)
-            exportMenu.add_command(label="Image", command=lambda: ExportAsImageMenu(MenuBar.globalVars.root))
-            exportMenu.add_command(label="PDF", command=lambda: ExportAsPDF(MenuBar.globalVars.root))
+        def importBtnClicked(event):
+            importMenu = ImportMenu(Ribbon.globalVars.root)
+            importMenu.tk_popup(event.x_root, event.y_root)
             
+        def exportBtnClicked(event):
+            exportMenu = ExportMenu(Ribbon.globalVars.root)
             exportMenu.tk_popup(event.x_root, event.y_root)
 
-        exportBtn.bind("<Button-1>", export)
+        importBtn.bind("<Button-1>", importBtnClicked)
+        importBtn.pack(side=LEFT)
+        
+        exportBtn.bind("<Button-1>", exportBtnClicked)
         exportBtn.pack(side=LEFT)
         
         undoBtn.config(command=undo)
@@ -706,11 +769,11 @@ class Ribbon(Frame):
         
         # buttons
         toolButtons1 = [
-            ToolButton(tbg1Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "select-icon-32.png"), label="Select", command=lambda: handleTool("Select")),
-            ToolButton(tbg1Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "pan-icon-32.png"), label="Pan", command=lambda: handleTool("Pan")),
-            ToolButton(tbg1Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "text-icon-32.png"), label="Text", command=lambda: handleTool("Text")),
-            ToolButton(tbg1Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "dimension-icon-32.png"), label="Dimension", command=lambda: handleTool("Dimension"), menu=dimMenu),
-            ToolButton(tbg1Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "eraser-icon-32.png"), label="Erase", command=lambda: handleTool("Erase"))
+            ToolButton(tbg1Buttons, tool=self.tools["Select"], image=PhotoImage(file=SCRIPT_DIR / "images" / "select-icon-32.png"), label="Select", command=lambda: handleTool("Select")),
+            ToolButton(tbg1Buttons, tool=self.tools["Pan"], image=PhotoImage(file=SCRIPT_DIR / "images" / "pan-icon-32.png"), label="Pan", command=lambda: handleTool("Pan")),
+            ToolButton(tbg1Buttons, tool=self.tools["Text"], image=PhotoImage(file=SCRIPT_DIR / "images" / "text-icon-32.png"), label="Text", command=lambda: handleTool("Text")),
+            ToolButton(tbg1Buttons, tool=self.tools["Dimension"], image=PhotoImage(file=SCRIPT_DIR / "images" / "dimension-icon-32.png"), label="Dimension", command=lambda: handleTool("Dimension"), menu=dimMenu),
+            ToolButton(tbg1Buttons, tool=self.tools["Erase"], image=PhotoImage(file=SCRIPT_DIR / "images" / "eraser-icon-32.png"), label="Erase", command=lambda: handleTool("Erase"))
         ]
         
         for tb in toolButtons1: tb.pack(side=LEFT, fill="y")
@@ -736,10 +799,10 @@ class Ribbon(Frame):
         circleMenu.add_radiobutton(label="2 Points", value=1, variable=self.tools["Circle"].mode)
         
         toolButtons2 = [
-            ToolButton(tbg2Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "line-icon-32.png"), label="Line", command=lambda: handleTool("Line"), menu=lineMenu),
-            ToolButton(tbg2Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "arc-icon-32.png"), label="Arc", command=lambda: handleTool("Arc")),
-            ToolButton(tbg2Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "circle-icon-32.png"), label="Circle", command=lambda: handleTool("Circle"), menu=circleMenu),
-            ToolButton(tbg2Buttons, image=PhotoImage(file=SCRIPT_DIR / "images" / "rectangle-icon-32.png"), label="Rectangle", command=lambda: handleTool("Rectangle")),
+            ToolButton(tbg2Buttons, tool=self.tools["Line"], image=PhotoImage(file=SCRIPT_DIR / "images" / "line-icon-32.png"), label="Line", command=lambda: handleTool("Line"), menu=lineMenu),
+            ToolButton(tbg2Buttons, tool=self.tools["Arc"], image=PhotoImage(file=SCRIPT_DIR / "images" / "arc-icon-32.png"), label="Arc", command=lambda: handleTool("Arc")),
+            ToolButton(tbg2Buttons, tool=self.tools["Circle"], image=PhotoImage(file=SCRIPT_DIR / "images" / "circle-icon-32.png"), label="Circle", command=lambda: handleTool("Circle"), menu=circleMenu),
+            ToolButton(tbg2Buttons, tool=self.tools["Rectangle"], image=PhotoImage(file=SCRIPT_DIR / "images" / "rectangle-icon-32.png"), label="Rectangle", command=lambda: handleTool("Rectangle")),
         ]
         
         Label(tbr1, bg=defaultKwArgs["bg"], text="Geometry").grid(row=1, column=2)
@@ -891,6 +954,8 @@ class ToolSettings(Frame):
     globalVars = None
     
     def __init__(self, master=None, tool="", toolObject=None, **kwargs):
+        globalVars = ToolSettings.globalVars
+        
         super().__init__(master, **kwargs)
         self.tool = tool
         self.toolObject = toolObject
@@ -901,10 +966,16 @@ class ToolSettings(Frame):
         
         ttk.Separator(self, style="Line.TSeparator", orient="vertical").pack(side=LEFT, fill="y", padx=2)
         
+        mode = toolObject.mode.get()
+        
         if tool == "Dimension":
             Label(self, text="Selection Type:", bg="white").pack(side=LEFT)
-            dimensionSelectionType = ttk.Combobox(self, textvariable=ToolSettings.globalVars.dimensionSelectionType, values=["Drawing", "Point"], state="readonly")
+            dimensionSelectionType = ttk.Combobox(self, textvariable=globalVars.dimensionSelectionType, state="readonly")
             dimensionSelectionType.pack(side=LEFT)
+            
+            self._dimensionSelectionType = dimensionSelectionType
+            
+            self.update()
             
             ttk.Separator(self, style="Line.TSeparator", orient="vertical").pack(side=LEFT, fill="y", padx=2)
             
@@ -912,7 +983,24 @@ class ToolSettings(Frame):
                 DimensionStyleSettings(ToolSettings.globalVars.root)
                     
             Button(self, text="Edit Style", command=openPopup).pack(side=LEFT)
-
+            
+    def update(self):
+        globalVars = ToolSettings.globalVars
+        
+        tool = self.tool
+        mode = self.toolObject.mode.get()
+        
+        if tool == "Dimension":
+            values = ["Drawing", "Point"]
+            
+            match mode:
+                case 2 | 3:
+                    values.pop()
+                    globalVars.dimensionSelectionType.set(values[-1])
+                    
+            if self._dimensionSelectionType:
+                self._dimensionSelectionType.configure(values=values)
+        
 class StatusBar(Frame):
     globalVars = None
     

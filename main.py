@@ -24,8 +24,8 @@ Ribbon.globalVars = globalVars
 StatusBar.globalVars = globalVars
 PropertyMenu.globalVars = globalVars
 ToolSettings.globalVars = globalVars
-
 ExportMenu.globalVars = globalVars
+ExportMenuWindow.globalVars = globalVars
 DimensionStyleSettings.globalVars = globalVars
 
 HistoryManager.globalVars = globalVars
@@ -58,6 +58,7 @@ Drawing.canvas = canvas
 Point.canvas = canvas
 Ribbon.canvas = canvas
 ExportMenu.canvas = canvas
+ExportMenuWindow.canvas = canvas
 Dimension.canvas = canvas
 Tool.canvas = canvas
 FixedTextAnnotation.canvas = canvas

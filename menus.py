@@ -8,6 +8,10 @@ from changeHistory import EraseCommand
 import os
 import io
 import math
+import ezdxf
+
+convertToAbsoluteSize = Conversions.convertToAbsoluteSize
+convertPx = Conversions.convertPx
 
 class CanvasContextMenu(Menu):
     globalVars = None
@@ -37,8 +41,24 @@ class CanvasContextMenu(Menu):
         self.entryconfig("Delete", state="normal" if len(self.selection) > 0 else "disabled")
         
         self.tk_popup(x, y)
+
+class ExportMenu(Menu):
+    globalVars = None
+    
+    def __init__(self, master=None, **kwargs):
+        globalVars = ExportMenu.globalVars
         
-class ExportMenu(Toplevel):
+        defaultKwArgs = { "tearoff": 0 }
+        
+        defaultKwArgs.update(kwargs)
+        
+        super().__init__(master, **defaultKwArgs)
+        
+        self.add_command(label="Image", command=lambda: ExportAsImageMenu(globalVars.root))
+        self.add_command(label="PDF", command=lambda: ExportAsPDF(globalVars.root))
+        self.add_command(label="DXF", command=lambda: ExportAsDXF(globalVars.root))
+
+class ExportMenuWindow(Toplevel):
     canvas = None
     globalVars = None
     
@@ -109,7 +129,7 @@ class ExportMenu(Toplevel):
     def getEntireBbox(self):
         from geometry import Drawing, Dimension, Point
         
-        canvas = ExportMenu.canvas
+        canvas = ExportMenuWindow.canvas
             
         # create image
         drawingBbox = Drawing.bboxAll()
@@ -170,21 +190,21 @@ class ExportMenu(Toplevel):
         marginRight = self._marginRight
         
         return (
-            Conversions.convertToAbsoluteSize(marginTop.variable.get(), self._previewUnit.get()),
-            Conversions.convertToAbsoluteSize(marginLeft.variable.get(), self._previewUnit.get()),
-            Conversions.convertToAbsoluteSize(marginBottom.variable.get(), self._previewUnit.get()),
-            Conversions.convertToAbsoluteSize(marginRight.variable.get(), self._previewUnit.get()),
+            convertToAbsoluteSize(marginTop.variable.get(), self._previewUnit.get()),
+            convertToAbsoluteSize(marginLeft.variable.get(), self._previewUnit.get()),
+            convertToAbsoluteSize(marginBottom.variable.get(), self._previewUnit.get()),
+            convertToAbsoluteSize(marginRight.variable.get(), self._previewUnit.get()),
         )
         
     def updateMargin(self, returnPressed=False):
         from geometry import Drawing, Dimension, Point
         
         previewCanvas = self.previewCanvas
-        canvas = ExportMenu.canvas
+        canvas = ExportMenuWindow.canvas
         
         entireBbox = self.getEntireBbox()
         
-        zoom = ExportMenu.globalVars.zoom.get() / 100
+        zoom = ExportMenuWindow.globalVars.zoom.get() / 100
 
         width = entireBbox[2] - entireBbox[0]
         height = entireBbox[3] - entireBbox[1]
@@ -229,15 +249,87 @@ class ExportMenu(Toplevel):
         for dimension in dimensions:
             dimension.previewToOtherCanvas(previewCanvas)
 
-class ExportAsImageMenu(ExportMenu):
+class ExportAsDXF(ExportMenuWindow):
+    def __init__(self, master=None):
+        super().__init__(master, padx=4, pady=4)
+        self.title("Export as DXF")
+        self._previewUnit = StringVar(self, value="in")
+        
+        content = Frame(self)
+        content.pack()
+            
+        lf1 = Frame(content)
+        lf1.pack(side=LEFT, anchor="n", fill="y", expand=True)
+            
+        group1 = LabelFrame(lf1, text="Unit")
+        group1.pack(fill="x")
+        
+        radioButtonGroup1 = Frame(group1)
+        radioButtonGroup1.pack(anchor="w")
+        
+        Radiobutton(radioButtonGroup1, text="Inches", value="in", variable=self._previewUnit).pack(anchor="w", side=LEFT)
+        Radiobutton(radioButtonGroup1, text="Centimeters", value="cm", variable=self._previewUnit).pack(anchor="w", side=LEFT)
+        Radiobutton(radioButtonGroup1, text="Millimeters", value="mm", variable=self._previewUnit).pack(anchor="w", side=LEFT)
+        
+        buttonsGroup = Frame(self)
+        buttonsGroup.pack()
+        
+        Button(buttonsGroup, text="Export", command=lambda: self.export()).pack(side=LEFT, padx=4)
+        Button(buttonsGroup, text="Cancel", command=self.destroy).pack(side=RIGHT, padx=4)
+        
+    def export(self, **kwargs):
+        from geometry import Drawing, Dimension, Point
+        
+        # make dxf
+        doc = ezdxf.new(dxfversion="R2010")
+        msp = doc.modelspace()
+        
+        for drawing in Drawing.drawings:
+            drawingType = drawing.type.get()
+            points = list(map(lambda point: (point.x, -point.y), drawing.getPoints()))
+            
+            match drawingType:
+                case "Line":
+                    msp.add_line(points[0], points[1])
+                case "Arc":
+                    msp.add_arc(
+                        center=(drawing.center.x, -drawing.center.y),
+                        radius=drawing.absoluteRadius.get(),
+                        start_angle=drawing.start.get(),
+                        end_angle=drawing.end.get()
+                    )
+                case "Circle":
+                    msp.add_circle(
+                        center=(drawing.center.x, -drawing.center.y),
+                        radius=drawing.absoluteRadius.get()
+                    )
+                case "Rectangle":
+                    msp.add_lwpolyline(points, close=True)
+        
+        # close window
+        self.destroy()
+        
+        # save dxf
+        filePath = filedialog.asksaveasfilename(
+            defaultextension=".dxf",
+            initialfile="Untitled",
+            filetypes=(
+                ("Drawing Exchange Format files", "*.dxf"),
+                ("All files", "*.*"),
+            )
+        )
+        
+        doc.saveas(filePath)
+    
+class ExportAsImageMenu(ExportMenuWindow):
     def __init__(self, master=None):
         from geometry import Drawing, Dimension, Point
         from customWidgets import LabeledEntry
 
         try:
-            canvas = ExportMenu.canvas
+            canvas = ExportMenuWindow.canvas
             
-            zoom = ExportMenu.globalVars.zoom.get() / 100
+            zoom = ExportMenuWindow.globalVars.zoom.get() / 100
             
             # create widget
             super().__init__(master, padx=4, pady=4)
@@ -352,16 +444,15 @@ class ExportAsImageMenu(ExportMenu):
             self._showCenter.trace_add("write", toggleCenter)
             self._showGrid.trace_add("write", toggleGrid)
             self._showOtherPoints.trace_add("write", toggleOtherPoints)
-
         except Exception as e:
             raise e
 
-class ExportAsPDF(ExportMenu):
+class ExportAsPDF(ExportMenuWindow):
     def __init__(self, master=None):
         try:
-            canvas = ExportMenu.canvas
+            canvas = ExportMenuWindow.canvas
             
-            zoom = ExportMenu.globalVars.zoom.get() / 100
+            zoom = ExportMenuWindow.globalVars.zoom.get() / 100
             
             # create widget
             super().__init__(master, padx=4, pady=4)
@@ -469,7 +560,99 @@ class ExportAsPDF(ExportMenu):
 
         except Exception as e:
             raise e
-          
+         
+class ImportMenu(Menu):
+    globalVars = None
+    
+    def __init__(self, master=None, **kwargs):
+        defaultKwArgs = { "tearoff": 0 }
+        
+        defaultKwArgs.update(kwargs)
+        
+        super().__init__(master, **defaultKwArgs)
+        self.add_command(label="DXF", command=lambda: self.import_("DXF"))
+        
+    def import_(self, fileType):
+        from geometry import Point, CenterMark
+        
+        globalVars = ExportMenu.globalVars
+        
+        filePath = filedialog.askopenfilename(
+            title="Import File",
+            filetypes=(
+                ("All files", "*.*"),
+            )
+        )
+        
+        match fileType:
+            case "DXF":
+                try: 
+                    from geometry import Drawing, Dimension
+                    
+                    doc = ezdxf.readfile(filePath)
+                    print("Successfully opened file.")
+                    
+                    # clear canvas
+                    while len(Drawing.drawings) > 0:
+                        Drawing.drawings[0].delete()
+                        
+                    while len(Dimension.dimensions) > 0:
+                        Dimension.dimensions[0].delete()
+                    
+                except FileNotFoundError:
+                    return
+                except Exception as e:
+                    messagebox.showerror("Import Failed", f"{type(e).__name__}: {e}", parent=globalVars.root)
+                    return
+                    
+                msp = doc.modelspace()
+                
+                for entity in msp:
+                    entityType = entity.dxftype()
+                    
+                    # print(f"Type: {entity.dxftype()}")
+                    if entityType == "LINE":
+                        from geometry import Line
+                        
+                        start = entity.dxf.start
+                        end = entity.dxf.end
+                        
+                        points = list(map(lambda point: Point(point[0], -point[1]), [start, end]))
+                        
+                        Line(*points).redraw()
+                    elif entityType == "ARC":
+                        from geometry import Arc
+                        
+                        center = entity.dxf.center
+                        center = CenterMark(center[0], -center[1])
+                        
+                        startAngle = entity.dxf.start_angle
+                        endAngle = entity.dxf.end_angle
+                        radius = entity.dxf.radius
+
+                        arc = Arc()
+                        arc.absoluteRadius.set(radius)
+                        arc.radius.set(convertPx(radius, arc.unit.get()))
+                        arc.setCenter(center)
+                        arc.start.set(startAngle)
+                        arc.end.set(endAngle)
+                        
+                        arc.redraw()
+                    elif entityType == "CIRCLE":
+                        from geometry import Circle
+                        
+                        center = entity.dxf.center
+                        center = CenterMark(center[0], -center[1])
+                        
+                        radius = entity.dxf.radius
+
+                        circle = Circle()
+                        circle.absoluteRadius.set(radius)
+                        circle.radius.set(convertPx(radius, circle.unit.get()))
+                        circle.setCenter(center)
+                        
+                        circle.redraw()
+
 class DimensionStyleSettings(Toplevel):
     globalVars = None
     

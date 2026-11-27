@@ -26,3 +26,9 @@ class Conversions:
         elif unit == "mm":
             return float(Decimal(str(value)) * Decimal(str(ppi)) / Decimal(str(25.4)))
         return value
+        
+    @staticmethod
+    def fixDegrees(angle):
+       angle = angle % 360
+       if angle <= -180: angle += 360
+       return angle

@@ -301,6 +301,8 @@ class DimensionTool(Tool):
             self.createPointPosition()
             
     def _toolActivated(self, event, ctrlKeyPressed=False):
+        from tkinter import messagebox
+        
         canvas = Tool.canvas
         globalVars = Tool.globalVars
         
@@ -371,29 +373,41 @@ class DimensionTool(Tool):
                     globalVars.currentDimension.draw()
                     counter = 0
         elif dimensionMode == 2: # radial
-            if dimensionSelectionType == "Drawing":
-                if counter == 0:
+            match counter:
+                case 0:
                     if len(drawings) > 0:
                         drawing = drawings[0]
+                        
+                        allowedDrawingTypes = ["Arc", "Circle"]
+                        
+                        if drawing.type.get() not in allowedDrawingTypes: 
+                            messagebox.showerror("Radial Dimension", "This dimension is only compatible with Arcs and Circles.")
+                            return
 
                         globalVars.currentDimension = RadialDimension()
                         globalVars.currentDimension.drawing = drawing
                         
                         counter += 1
-                elif counter == 1:
+                case 1:
                     globalVars.currentDimension.draw()
                     counter = 0
         elif dimensionMode == 3: # diametric
-            if dimensionSelectionType == "Drawing":
-                if counter == 0:
+            match counter:
+                case 0:
                     if len(drawings) > 0:
                         drawing = drawings[0]
 
+                        allowedDrawingTypes = ["Arc", "Circle"]
+                        
+                        if drawing.type.get() not in allowedDrawingTypes: 
+                            messagebox.showerror("Diametric Dimension", "This dimension is only compatible with Arcs and Circles.")
+                            return
+                            
                         globalVars.currentDimension = DiametricDimension()
                         globalVars.currentDimension.drawing = drawing
                         
                         counter += 1
-                elif counter == 1:
+                case 1:
                     globalVars.currentDimension.draw()
                     counter = 0
                 
@@ -556,7 +570,7 @@ class RectangleTool(Tool):
         pY = canvasCursorPosition.y.get()
         
         p = Point(pX, pY)
-        
+
         if counter == 0:
             globalVars.currentDrawing = Rectangle(p)
             
@@ -564,8 +578,19 @@ class RectangleTool(Tool):
         elif counter == 1:
             counter = 0
             
-            globalVars.currentDrawing.addPoint(p)
-            globalVars.currentDrawing.draw()
+            drawing = globalVars.currentDrawing
+            
+            startPoint = drawing.getPoints()[0]
+            
+            startEndDiffX = drawing.startEndDiff.x
+            startEndDiffY = drawing.startEndDiff.y
+            
+            drawing.addPoint(startPoint + (startEndDiffX, 0))
+            drawing.addPoint(startPoint + drawing.startEndDiff)
+            drawing.addPoint(startPoint + (0, startEndDiffY))
+            
+            drawing.draw()
+            
             globalVars.currentDrawing = None
             
         globalVars.toolActivatedCounter.set(counter)
@@ -597,9 +622,10 @@ class SelectTool(Tool):
         
         objects = canvas.find_overlapping(x, y, x, y)
         drawings = [Drawing.getDrawingById(objectId) for objectId in objects if Drawing.getDrawingById(objectId)]
+        dimensions = set([Dimension.getDimensionByAnnotationId(objectId) for objectId in objects if Dimension.getDimensionByAnnotationId(objectId)])
             
         Tool.propertyMenu.startSelection()
-        Tool.propertyMenu.updateSelection(*drawings, ctrlKeyPressed=ctrlKeyPressed)
+        Tool.propertyMenu.updateSelection(*drawings, *dimensions, ctrlKeyPressed=ctrlKeyPressed)
         
     def _toolBtn1Motion(self, event, ctrlKeyPressed=False):
         canvas = Tool.canvas
@@ -614,8 +640,9 @@ class SelectTool(Tool):
         
         objects = canvas.find_overlapping(*canvas.coords(self.selectionBox))
         drawings = [Drawing.getDrawingById(objectId) for objectId in objects if Drawing.getDrawingById(objectId)]
+        dimensions = set([Dimension.getDimensionByAnnotationId(objectId) for objectId in objects if Dimension.getDimensionByAnnotationId(objectId)])
             
-        Tool.propertyMenu.updateSelection(*drawings, ctrlKeyPressed=ctrlKeyPressed)
+        Tool.propertyMenu.updateSelection(*drawings, *dimensions, ctrlKeyPressed=ctrlKeyPressed)
         
     def _toolActivated(self, event, ctrlKeyPressed=False):
         canvas = Tool.canvas

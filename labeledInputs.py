@@ -31,7 +31,9 @@ class LabeledInput(Frame):
         for key in defaultKwArgs:
             setattr(self, key, defaultKwArgs[key])
 
+        self.kwargs = defaultKwArgs
         self._configure = None
+        self._traces = []
         
         # self.grid_columnconfigure(0, weight=1, uniform="_")
         # self.grid_columnconfigure(1, weight=1, uniform="_")
@@ -40,7 +42,26 @@ class LabeledInput(Frame):
             
         labelWidget = Label(self, text=self.label, **labelConfig)
         labelWidget.grid(row=0, column=0, sticky="nsew")
+        
+        def removeAllTraces(event):
+            for traceData in self._traces:
+                variable = traceData["variable"]
+                mode = traceData["mode"]
+                trace = traceData["trace"]
+                
+                variable.trace_remove(mode, trace)
+            
+        self.bind("<Destroy>", removeAllTraces)
 
+    def appendTrace(self, variable, mode, callback):
+        trace = variable.trace_add(mode, callback)
+        self._traces.append({
+            "variable": variable,
+            "mode": mode,
+            "callback": callback,
+            "trace": trace
+        })
+        
     def configure(self, cnf=None, **kwargs):
         if cnf is None: cnf = {}
         kwargs.update(cnf)
@@ -71,6 +92,27 @@ class LabeledInput(Frame):
         result = f"{value} {resultingUnit}"
         
         return result
+        
+    def getValueFromValueUnit(self, text):
+        text = str(text)
+        
+        matchA = re.search(r"^([+-]?\d+(?:\.\d+)?)$", text.strip()) # value only
+        matchB = re.search(r"^([+-]?\d+(?:\.\d+)?)\s?(\w+)$", text.strip()) # value and unit
+        matchC = re.search(r"^([+-]?(?:\.\d+)?)$", text.strip()) # value without whole number
+        matchD = re.search(r"^([+-]?(?:\.\d+)?)\s?(\w+)$", text.strip()) # value without whole number and unit
+        
+        value = 0
+        
+        if matchA:
+            value = float(matchA.group(1))
+        elif matchB:
+            value = float(matchB.group(1))
+        elif matchC:
+            value = float(matchC.group(1))
+        elif matchD:
+            value = float(matchD.group(1))
+            
+        return value
         
     def set(self, value):
         if isinstance(self, LabeledEntry):
@@ -103,7 +145,7 @@ class LabeledEntry(LabeledInput):
         defaultKwArgs.update(kwargs)
         
         super().__init__(master, **defaultKwArgs)
-        self._lastUnit = "in"
+        self._lastUnit = self.unitVar.get()
         self._input = None
         self.onChange = []
         
@@ -111,18 +153,24 @@ class LabeledEntry(LabeledInput):
         useUnit = self.useUnit
         variables = self.variables
         
-        initialValue = self.values[0] if len(self.values) > 0 else None
+        firstValue = self.values[0] if len(self.values) > 0 else None
         
-        multipleValues = initialValue and self.values.count(initialValue) != len(self.values)
+        multipleValues = firstValue is not None and self.values.count(firstValue) != len(self.values)
         returnPressed = False
         unitChanged = False
 
         if self.type == "Text":
-            self.variable = StringVar(value=initialValue if initialValue else "")
+            self.variable = StringVar(value=firstValue if firstValue is not None else "")
         elif self.type == "Integer":
-            self.variable = IntVar(value=initialValue if initialValue else 0)
+            try: firstValue = int(firstValue)
+            except: firstValue = 0
+            
+            self.variable = IntVar(value=firstValue)
         elif self.type == "Double":
-            self.variable = DoubleVar(value=initialValue if initialValue else 0)
+            try: firstValue = float(firstValue)
+            except: firstValue = 0.0
+            
+            self.variable = DoubleVar(value=firstValue)
         
         def onReturn(event):
             nonlocal returnPressed
@@ -191,7 +239,19 @@ class LabeledEntry(LabeledInput):
             
             unitVarValue = unitVar.get()
             
-            value = convertPx(convertToAbsoluteSize(self.variable.get(), self._lastUnit), unitVarValue)
+            value = self.variable.get()
+            
+            if useUnit:
+                value = self.getValueFromValueUnit(self.variable.get())
+                
+                # print("before conversion:")
+                # print(value, self._lastUnit, unitVarValue)
+
+                value = convertPx(convertToAbsoluteSize(value, self._lastUnit), unitVarValue)
+                
+                # print("after conversion:")
+                # print(value, self._lastUnit, unitVarValue)
+                # print("-"*10)
             
             with suppress(Exception):
                 if isinstance(self.variable, DoubleVar):
@@ -203,10 +263,11 @@ class LabeledEntry(LabeledInput):
                     
                 entry.delete(0, END)
                 
-                if useUnit: entry.insert(0, f"{value} {unitVarValue}")
-                else: entry.insert(0, value)
-                    
-            self._lastUnit = unitVar.get()
+                if useUnit: 
+                    entry.insert(0, f"{value} {unitVarValue}")
+                    self._lastUnit = unitVarValue
+                else: 
+                    entry.insert(0, value)
             
             unitChanged = False
         
@@ -218,7 +279,9 @@ class LabeledEntry(LabeledInput):
         entry.bind("<Return>", onReturn)
         
         self.variable.trace_add("write", variableChanged)
-        unitVar.trace_add("write", onUnitChange)
+        
+        if useUnit:
+            self.appendTrace(unitVar, "write", onUnitChange)
         
         currentValue = self.variable.get()
         
@@ -235,7 +298,9 @@ class LabeledEntry(LabeledInput):
         self._input = entry
     
     def _configure(self, **kwargs):
-        pass
+        if "readOnly" in kwargs: 
+            if kwargs["readOnly"]: self._input.config(state="readonly")
+            else: self._input.config(state="normal")
         
     def get(self):
         return self._input.get()
@@ -245,9 +310,14 @@ class LabeledDropdown(LabeledInput):
     
     def get(self):
         return self._input.get()
+        
+    def _configure(self, **kwargs):
+        if "readOnly" in kwargs: 
+            if kwargs["readOnly"]:self._input.state(["disabled"])
+            else: self._input.state(["!disabled"])
     
     def __init__(self, master=None, **kwargs):
-        globalVars = LabeledEntry.globalVars
+        globalVars = LabeledInput.globalVars
         
         defaultKwArgs = {
             "dropdownConfig": {},
@@ -260,13 +330,13 @@ class LabeledDropdown(LabeledInput):
         self._input = None
         self.onChange = []
         
-        initialValue = self.values[0] if len(self.values) > 0 else None
+        firstValue = self.values[0] if len(self.values) > 0 else None
         
-        multipleValues = initialValue and self.values.count(initialValue) != len(self.values)
+        multipleValues = firstValue is not None and self.values.count(firstValue) != len(self.values)
         returnPressed = False
         modifyVariables = False
         
-        self.variable = StringVar(value=initialValue if initialValue else "")
+        self.variable = StringVar(value=firstValue if firstValue else "")
         
         def comboboxSelected(event):
             nonlocal returnPressed
@@ -277,17 +347,11 @@ class LabeledDropdown(LabeledInput):
             returnPressed = False
         
         def variableChanged(*args):
-            # nonlocal returnPressed
-            
-            # print(self.variable.get())
-            
             for variable in defaultKwArgs["variables"]:
                 if variable: variable.set(self.variable.get())
                 
             for f in self.onChange: f(returnPressed)
             
-            # returnPressed = False
-        
         dropdownStyle = ttk.Style()
         dropdownStyle.configure("TCombobox", **self.dropdownConfig)
         
@@ -299,7 +363,58 @@ class LabeledDropdown(LabeledInput):
         self.variable.trace_add("write", variableChanged)
         self._input = dropdown
         
-        if multipleValues: dropdown.set("multiple")
-        else: dropdown.set(initialValue)
+        if multipleValues: self._input.set("multiple")
+        else: self._input.set(firstValue)
             
-        if defaultKwArgs["readOnly"]: dropdown.configure(state="disabled")
+        if defaultKwArgs["readOnly"]: self._input.configure(state="disabled")
+        
+class LabeledCheckbox(LabeledInput):
+    def get(self):
+        return self.variable.get()
+        
+    def _configure(self, **kwargs):
+        if "readOnly" in kwargs: 
+            if kwargs["readOnly"]:self._input.state(["disabled"])
+            else: self._input.state(["!disabled"])
+        
+    def __init__(self, master=None, **kwargs):
+        globalVars = LabeledInput.globalVars
+        
+        defaultKwArgs = {}
+        
+        defaultKwArgs.update(kwargs)
+        
+        super().__init__(master, **defaultKwArgs)
+        
+        self._input = None
+        self.onChange = []
+        
+        self.kwargs.update(defaultKwArgs)
+        
+        defaultKwArgs = self.kwargs
+        
+        firstValue = self.values[0] if len(self.values) > 0 else None
+        
+        multipleValues = firstValue is not None and self.values.count(firstValue) != len(self.values)
+        returnPressed = False
+        modifyVariables = False
+        
+        self.variable = IntVar(value=int(firstValue))
+
+        def variableChanged(*args):
+            for variable in defaultKwArgs["variables"]:
+                if variable: variable.set(self.variable.get())
+                
+            for f in self.onChange: f(returnPressed)
+            
+            print(self._input.state())
+        
+        checkbox = ttk.Checkbutton(self, variable=self.variable, onvalue=1, offvalue=0, takefocus=False)
+        checkbox.grid(row=0, column=1, sticky="nsew")
+        
+        self.variable.trace_add("write", variableChanged)
+        self._input = checkbox
+
+        if multipleValues: self._input.state(["alternate"])
+        
+        if defaultKwArgs["readOnly"]: self._input.state(["disabled"])
